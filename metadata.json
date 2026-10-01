@@ -1,0 +1,6 @@
+{
+  "name": "Atelier",
+  "description": "Haute couture 3D fashion fitting room, lookbook studio, style feed, and AI stylist.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
