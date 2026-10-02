@@ -256,7 +256,8 @@
         statusEl.style.opacity = '1';
       }
 
-      const fileName = (gender === 'male') ? 'models/mannequin_male.glb' : 'models/mannequin_female.glb';
+      const basePath = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
+const fileName = basePath + ((gender === 'male') ? 'models/mannequin_male.glb' : 'models/mannequin_female.glb');
       const loader = new THREE.GLTFLoader();
 
       loader.load(
