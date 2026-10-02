@@ -163,10 +163,9 @@
       scene = new THREE.Scene();
       scene.background = new THREE.Color(state.isDark ? 0x111111 : 0xFAFAFA);
 
-      camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 100);
-      camera.position.set(0, 1.25, 3.8);
-      camera.lookAt(0, 0.95, 0);
-
+      camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
+      camera.position.set(0, 1.05, 3.4);
+      camera.lookAt(0, 0.85, 0);
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setSize(width, height);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -272,21 +271,27 @@ const fileName = basePath + ((gender === 'male') ? 'models/mannequin_male.glb' :
 
           currentModelGroup = gltf.scene;
 
-          // Compute bounding box to auto-center and normalize scale
-          const box = new THREE.Box3().setFromObject(currentModelGroup);
-          const size = box.getSize(new THREE.Vector3());
-          const center = box.getCenter(new THREE.Vector3());
+// 1. Force update matrix world to get true vertex bounds
+currentModelGroup.updateMatrixWorld(true);
 
-          // Standardize model height to roughly 1.75m
-          const targetHeight = 1.75;
-          const scaleFactor = targetHeight / (size.y || 1);
-          currentModelGroup.scale.setScalar(scaleFactor);
+// 2. Measure raw bounds
+let box = new THREE.Box3().setFromObject(currentModelGroup);
+let size = box.getSize(new THREE.Vector3());
 
-          // Center horizontally and ground feet onto podium
-          currentModelGroup.position.x = -center.x * scaleFactor;
-          currentModelGroup.position.z = -center.z * scaleFactor;
-          currentModelGroup.position.y = -box.min.y * scaleFactor + 0.06;
+// 3. Scale down from Mixamo centimeter units (~180) to Three.js meter units (1.6m)
+const targetHeight = 1.6;
+const rawHeight = size.y > 0 ? size.y : 1;
+const scaleFactor = targetHeight / rawHeight;
+currentModelGroup.scale.setScalar(scaleFactor);
 
+// 4. Update bounds after scaling to ground feet right on the podium ring
+currentModelGroup.updateMatrixWorld(true);
+box = new THREE.Box3().setFromObject(currentModelGroup);
+
+const center = box.getCenter(new THREE.Vector3());
+currentModelGroup.position.x = -center.x;
+currentModelGroup.position.z = -center.z;
+currentModelGroup.position.y = -box.min.y + 0.06;
           // Traverse meshes and map materials
           currentModelGroup.traverse((child) => {
             if (child.isMesh) {
