@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-  <title>Atelier Stylized 3D Digital Avatar</title>
+  <title>Atelier 3D Dressing Room</title>
   <style>
     * {
       box-sizing: border-box;
@@ -64,6 +64,19 @@
       background-color: #D4AF37;
       box-shadow: 0 0 6px #D4AF37;
     }
+    #status-indicator {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      color: rgba(212, 175, 55, 0.9);
+      font-size: 12px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      font-weight: 600;
+      pointer-events: none;
+      transition: opacity 0.4s ease;
+    }
     body.light-mode {
       background-color: #FAFAFA !important;
     }
@@ -92,6 +105,7 @@
       color: rgba(120, 120, 120, 0.7);
     }
   </style>
+
   <!-- Three.js & GLTFLoader -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
@@ -101,814 +115,319 @@
     <div id="studio-overlay">
       <div class="badge" id="model-badge">
         <span class="badge-dot"></span>
-        <span id="model-label">MALE • SLIM</span>
+        <span id="model-label">FEMALE • REGULAR</span>
       </div>
     </div>
+    <div id="status-indicator">Loading Model...</div>
     <div id="touch-hint">
       <span>⟵ Drag to rotate 360° ⟶</span>
     </div>
   </div>
 
   <script>
-    // ==========================================
-    // ATELIER BITMOJI 3D ENGINE STATE
-    // ==========================================
     const state = {
-      gender: 'male',
-      bodyType: 'slim',
+      gender: 'female',
+      bodyType: 'regular',
       rotation: 0,
       isDark: true,
-      skinTone: '#EEDBC8',
+      skinTone: null,
       colors: {
-        top: '#111111',
-        bottom: '#1B263B',
-        shoes: '#F5F5F0',
-        headwear: '#111111',
-        accessories: '#D4AF37'
-      },
-      activeGarments: {
-        headwear: 'cap_baseball',
-        top: 'hoodie_oversized',
-        bottom: 'jeans_baggy',
-        footwear: 'sneakers_chunky',
-        accessories: 'chain_gold'
+        top: null,
+        bottom: null,
+        shoes: null,
+        headwear: null,
+        accessories: null
       }
     };
 
-    let activeEngine = 'none';
+    let scene, camera, renderer, currentModelGroup, stageGroup;
     let isDragging = false;
     let previousTouchX = 0;
     let touchVelocity = 0;
 
-    let scene, camera, webglRenderer, avatarGroup, stageGroup;
-    let keyRimLight, fillRimLight, keyFrontLight, ambientLight;
-    const materials = {};
-    const garmentRegistry = {
-      headwear: {},
-      top: {},
-      bottom: {},
-      footwear: {},
-      accessories: {}
+    // Track mesh materials by inferred category
+    const categorizedMaterials = {
+      skin: [],
+      top: [],
+      bottom: [],
+      shoes: [],
+      hair: [],
+      general: []
     };
 
-    // ==========================================
-    // INITIALIZATION & FALLBACK HANDLING
-    // ==========================================
     function init() {
       const container = document.getElementById('canvas-container');
-      if (!container) return;
+      const width = container.clientWidth || window.innerWidth;
+      const height = container.clientHeight || window.innerHeight;
 
-      const success = tryInitWebGL(container);
-      if (success) {
-        activeEngine = 'webgl';
-      } else {
-        initCanvas2D(container);
-        activeEngine = 'canvas2d';
-      }
+      scene = new THREE.Scene();
+      scene.background = new THREE.Color(state.isDark ? 0x111111 : 0xFAFAFA);
+
+      camera = new THREE.PerspectiveCamera(40, width / height, 0.1, 100);
+      camera.position.set(0, 1.25, 3.8);
+      camera.lookAt(0, 0.95, 0);
+
+      renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(width, height);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      container.appendChild(renderer.domElement);
+
+      setupLighting();
+      buildStage();
+      bindPointerEvents(renderer.domElement);
+
+      // Load initial model (Female by default)
+      loadGLBModel(state.gender);
+
+      window.addEventListener('resize', onWindowResize);
+      animate();
     }
 
-    function tryInitWebGL(container) {
-      if (typeof THREE === 'undefined') return false;
+    function setupLighting() {
+      const ambient = new THREE.AmbientLight(0xFFFFFF, 0.85);
+      scene.add(ambient);
 
-      try {
-        const width = container.clientWidth || window.innerWidth;
-        const height = container.clientHeight || window.innerHeight;
+      // Key Soft Front-Right Light
+      const keyLight = new THREE.DirectionalLight(0xFFFBF0, 1.1);
+      keyLight.position.set(2.0, 3.2, 2.5);
+      keyLight.castShadow = true;
+      keyLight.shadow.mapSize.width = 1024;
+      keyLight.shadow.mapSize.height = 1024;
+      scene.add(keyLight);
 
-        const canvas = document.createElement('canvas');
-        const gl = canvas.getContext('webgl', { failIfMajorPerformanceCaveat: false, powerPreference: "default" }) ||
-                   canvas.getContext('experimental-webgl', { failIfMajorPerformanceCaveat: false });
-        if (!gl) return false;
-
-        scene = new THREE.Scene();
-        scene.background = new THREE.Color(state.isDark ? 0x111111 : 0xFAFAFA);
-
-        camera = new THREE.PerspectiveCamera(38, width / height, 0.1, 100);
-        camera.position.set(0, 1.25, 4.2);
-        camera.lookAt(0, 0.9, 0);
-
-        webglRenderer = new THREE.WebGLRenderer({
-          canvas: canvas,
-          antialias: true,
-          alpha: true,
-          powerPreference: "default",
-          failIfMajorPerformanceCaveat: false
-        });
-        webglRenderer.setSize(width, height);
-        webglRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-        webglRenderer.shadowMap.enabled = true;
-        webglRenderer.shadowMap.type = THREE.PCFSoftShadowMap;
-        container.appendChild(webglRenderer.domElement);
-
-        setupWebGLLighting();
-        buildWebGLStage();
-        buildBitmojiAvatar();
-
-        bindPointerEvents(webglRenderer.domElement);
-        animate();
-        return true;
-      } catch (err) {
-        console.warn("WebGL init failed, falling back to Canvas2D:", err);
-        return false;
-      }
-    }
-
-    // ==========================================
-    // TWO-TONE RIM LIGHTING & MATTE STUDIO
-    // ==========================================
-    function setupWebGLLighting() {
-      ambientLight = new THREE.AmbientLight(0xFFFFFF, 0.55);
-      scene.add(ambientLight);
-
-      // Key Front Soft Light
-      keyFrontLight = new THREE.DirectionalLight(0xFFF9E6, 0.75);
-      keyFrontLight.position.set(1.5, 3.0, 3.0);
-      keyFrontLight.castShadow = true;
-      keyFrontLight.shadow.mapSize.width = 1024;
-      keyFrontLight.shadow.mapSize.height = 1024;
-      keyFrontLight.shadow.camera.near = 0.5;
-      keyFrontLight.shadow.camera.far = 10;
-      scene.add(keyFrontLight);
-
-      // Cool Secondary Fill
-      const fillLight = new THREE.DirectionalLight(0xE0F7FA, 0.35);
-      fillLight.position.set(-2.0, 1.8, 2.5);
+      // Cool Fill Light (Left)
+      const fillLight = new THREE.DirectionalLight(0xEDF2F7, 0.6);
+      fillLight.position.set(-2.0, 2.0, 2.0);
       scene.add(fillLight);
 
-      // Two-Tone Stylized Rim Lights
-      // 1. Warm Golden Rim Light (Right-Rear)
-      keyRimLight = new THREE.DirectionalLight(0xD4AF37, 1.25);
-      keyRimLight.position.set(2.4, 2.6, -2.6);
-      scene.add(keyRimLight);
+      // Atelier Signature Gold Rim Light (Right-Back)
+      const goldRim = new THREE.DirectionalLight(0xD4AF37, 1.2);
+      goldRim.position.set(2.2, 2.4, -2.2);
+      scene.add(goldRim);
 
-      // 2. Cool Cyan/Ice Rim Light (Left-Rear)
-      fillRimLight = new THREE.DirectionalLight(0x64B5F6, 0.95);
-      fillRimLight.position.set(-2.4, 2.0, -2.6);
-      scene.add(fillRimLight);
+      // Ice-Blue Accent Rim Light (Left-Back)
+      const blueRim = new THREE.DirectionalLight(0x64B5F6, 0.8);
+      blueRim.position.set(-2.2, 2.0, -2.2);
+      scene.add(blueRim);
     }
 
-    function buildWebGLStage() {
+    function buildStage() {
       stageGroup = new THREE.Group();
 
-      // Circular Runway Pedestal Podium
-      const pedestalGeo = new THREE.CylinderGeometry(0.88, 0.94, 0.07, 48);
-      const pedestalMat = new THREE.MeshStandardMaterial({
-        color: state.isDark ? 0x1A1A1A : 0xFFFFFF,
-        roughness: 0.35,
-        metalness: 0.08
-      });
-      const pedestal = new THREE.Mesh(pedestalGeo, pedestalMat);
-      pedestal.position.y = 0.035;
+      // Circular Podium
+      const pedestal = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.85, 0.9, 0.06, 48),
+        new THREE.MeshStandardMaterial({
+          color: state.isDark ? 0x1A1A1A : 0xFFFFFF,
+          roughness: 0.35,
+          metalness: 0.1
+        })
+      );
+      pedestal.position.y = 0.03;
       pedestal.receiveShadow = true;
       stageGroup.add(pedestal);
 
-      // Matte Gold Runway Rim Trim
-      const rimGeo = new THREE.TorusGeometry(0.91, 0.012, 16, 48);
-      rimGeo.rotateX(Math.PI / 2);
-      const goldMat = new THREE.MeshStandardMaterial({
-        color: 0xD4AF37,
-        roughness: 0.25,
-        metalness: 0.85
-      });
-      const rim = new THREE.Mesh(rimGeo, goldMat);
-      rim.position.y = 0.07;
+      // Gold Trim Ring
+      const rim = new THREE.Mesh(
+        new THREE.TorusGeometry(0.87, 0.012, 16, 48),
+        new THREE.MeshStandardMaterial({
+          color: 0xD4AF37,
+          roughness: 0.25,
+          metalness: 0.85
+        })
+      );
+      rim.rotation.x = Math.PI / 2;
+      rim.position.y = 0.06;
       stageGroup.add(rim);
 
-      // Soft contact shadow directly under avatar feet
-      const shadowCanvas = document.createElement('canvas');
-      shadowCanvas.width = 128;
-      shadowCanvas.height = 128;
-      const sCtx = shadowCanvas.getContext('2d');
-      const grad = sCtx.createRadialGradient(64, 64, 4, 64, 64, 60);
-      grad.addColorStop(0, 'rgba(0, 0, 0, 0.55)');
-      grad.addColorStop(0.5, 'rgba(0, 0, 0, 0.25)');
-      grad.addColorStop(1, 'rgba(0, 0, 0, 0)');
-      sCtx.fillStyle = grad;
-      sCtx.fillRect(0, 0, 128, 128);
-
-      const shadowTex = new THREE.CanvasTexture(shadowCanvas);
-      const shadowPlane = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.85, 0.85),
-        new THREE.MeshBasicMaterial({ map: shadowTex, transparent: true, opacity: 0.7 })
-      );
-      shadowPlane.rotation.x = -Math.PI / 2;
-      shadowPlane.position.y = 0.072;
-      stageGroup.add(shadowPlane);
-
-      materials.stage = pedestalMat;
-      materials.gold = goldMat;
       scene.add(stageGroup);
     }
 
     // ==========================================
-    // STYLIZED BITMOJI AVATAR & MODULAR GARMENTS
+    // GLTF / GLB MODEL LOADER
     // ==========================================
-    function buildBitmojiAvatar() {
-      if (avatarGroup) scene.remove(avatarGroup);
-      avatarGroup = new THREE.Group();
-
-      // Cel-Shaded / Matte Materials (Smooth PBR with tuned matte finish)
-      materials.skin = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(state.skinTone),
-        roughness: 0.42,
-        metalness: 0.02
-      });
-      materials.headwear = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(state.colors.headwear),
-        roughness: 0.48,
-        metalness: 0.05
-      });
-      materials.top = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(state.colors.top),
-        roughness: 0.52,
-        metalness: 0.04
-      });
-      materials.bottom = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(state.colors.bottom),
-        roughness: 0.50,
-        metalness: 0.04
-      });
-      materials.shoes = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(state.colors.shoes),
-        roughness: 0.40,
-        metalness: 0.06
-      });
-      materials.accessories = new THREE.MeshStandardMaterial({
-        color: new THREE.Color(state.colors.accessories),
-        roughness: 0.28,
-        metalness: 0.85
-      });
-      materials.hair = new THREE.MeshStandardMaterial({
-        color: 0x221814,
-        roughness: 0.65,
-        metalness: 0.02
-      });
-      materials.eyeWhite = new THREE.MeshBasicMaterial({ color: 0xFFFFFF });
-      materials.eyePupil = new THREE.MeshBasicMaterial({ color: 0x1A1412 });
-      materials.boxer = new THREE.MeshStandardMaterial({
-        color: 0x18181C,
-        roughness: 0.55,
-        metalness: 0.03
-      });
-
-      const isFemale = state.gender === 'female';
-      const bType = state.bodyType;
-      const wMult = (bType === 'athletic') ? 1.06 :
-                    (bType === 'broad') ? 1.18 :
-                    (bType === 'curvy') ? 1.12 : 0.92;
-
-      // 1. STYLIZED HEAD & EXPRESSIVE FACE (Snap Bitmoji Proportions)
-      const headGroup = new THREE.Group();
-      headGroup.position.set(0, 1.86, 0);
-
-      // Stylized Smooth Cranium
-      const craniumGeo = new THREE.SphereGeometry(0.125, 32, 32);
-      craniumGeo.scale(0.92, 1.15, 0.98);
-      const headMesh = new THREE.Mesh(craniumGeo, materials.skin);
-      headMesh.castShadow = true;
-      headGroup.add(headMesh);
-
-      // Defined Stylized Jaw & Chin
-      const chinGeo = new THREE.SphereGeometry(0.048, 24, 24);
-      chinGeo.scale(0.85, 0.88, 1.15);
-      const chin = new THREE.Mesh(chinGeo, materials.skin);
-      chin.position.set(0, -0.078, 0.045);
-      headGroup.add(chin);
-
-      // Expressive Stylized Eyes
-      [-1, 1].forEach(side => {
-        const eyeGroup = new THREE.Group();
-        eyeGroup.position.set(side * 0.046, -0.015, 0.108);
-
-        // White Sclera
-        const sclera = new THREE.Mesh(new THREE.SphereGeometry(0.018, 16, 16), materials.eyeWhite);
-        sclera.scale.set(1.15, 0.90, 0.45);
-        eyeGroup.add(sclera);
-
-        // Dark Iris/Pupil
-        const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.010, 16, 16), materials.eyePupil);
-        pupil.scale.set(1.0, 1.0, 0.35);
-        pupil.position.set(0, 0, 0.007);
-        eyeGroup.add(pupil);
-
-        // Specular Catchlight Sparkle
-        const sparkle = new THREE.Mesh(new THREE.SphereGeometry(0.003, 8, 8), materials.eyeWhite);
-        sparkle.position.set(0.003, 0.003, 0.010);
-        eyeGroup.add(sparkle);
-
-        // Stylized Eyebrow
-        const brow = new THREE.Mesh(new THREE.BoxGeometry(0.034, 0.006, 0.008), materials.hair);
-        brow.position.set(0, 0.024, 0.005);
-        brow.rotation.z = side * -0.08;
-        eyeGroup.add(brow);
-
-        headGroup.add(eyeGroup);
-      });
-
-      // Stylized Button Nose
-      const nose = new THREE.Mesh(new THREE.SphereGeometry(0.014, 16, 16), materials.skin);
-      nose.scale.set(0.85, 0.95, 1.25);
-      nose.position.set(0, -0.042, 0.124);
-      headGroup.add(nose);
-
-      // Expressive Mouth (Confident Stylized Smile)
-      const mouth = new THREE.Mesh(new THREE.TorusGeometry(0.020, 0.004, 12, 18, Math.PI * 0.8), materials.hair);
-      mouth.position.set(0, -0.075, 0.112);
-      mouth.rotation.x = 0.2;
-      mouth.rotation.z = Math.PI * 1.1;
-      headGroup.add(mouth);
-
-      // Stylized Ears
-      [-1, 1].forEach(side => {
-        const ear = new THREE.Mesh(new THREE.SphereGeometry(0.028, 16, 16), materials.skin);
-        ear.scale.set(0.35, 1.15, 0.80);
-        ear.position.set(side * 0.115, -0.02, 0);
-        ear.rotation.y = side * 0.25;
-        headGroup.add(ear);
-      });
-
-      // Stylized Haircut Base
-      const hairGroup = new THREE.Group();
-      hairGroup.name = "hair_base";
-      const hairCrown = new THREE.Mesh(new THREE.SphereGeometry(0.130, 28, 28), materials.hair);
-      hairCrown.scale.set(0.96, 1.16, 0.98);
-      hairCrown.position.set(0, 0.02, -0.01);
-      hairGroup.add(hairCrown);
-
-      const hairFade = new THREE.Mesh(new THREE.CylinderGeometry(0.124, 0.118, 0.09, 28), materials.hair);
-      hairFade.position.set(0, 0.02, -0.015);
-      hairGroup.add(hairFade);
-      headGroup.add(hairGroup);
-
-      // 2. MODULAR HEADWEAR GARMENTS
-      const headwearMount = new THREE.Group();
-      headwearMount.name = "headwear_mount";
-
-      // Cap (Baseball / Snapback)
-      const capMesh = new THREE.Group();
-      capMesh.name = "cap_baseball";
-      const capCrown = new THREE.Mesh(new THREE.SphereGeometry(0.135, 24, 24, 0, Math.PI * 2, 0, Math.PI * 0.55), materials.headwear);
-      capCrown.position.set(0, 0.02, 0);
-      capMesh.add(capCrown);
-      const capVisor = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.012, 0.11), materials.headwear);
-      capVisor.position.set(0, 0.035, 0.13);
-      capVisor.rotation.x = 0.08;
-      capMesh.add(capVisor);
-      const capButton = new THREE.Mesh(new THREE.SphereGeometry(0.012, 12, 12), materials.accessories);
-      capButton.position.set(0, 0.155, 0);
-      capMesh.add(capButton);
-      headwearMount.add(capMesh);
-      garmentRegistry.headwear['cap_baseball'] = capMesh;
-
-      // Knit Beanie
-      const beanieMesh = new THREE.Group();
-      beanieMesh.name = "beanie_knit";
-      const beanieBody = new THREE.Mesh(new THREE.CylinderGeometry(0.138, 0.132, 0.14, 28), materials.headwear);
-      beanieBody.position.set(0, 0.06, 0);
-      beanieMesh.add(beanieBody);
-      const beanieDome = new THREE.Mesh(new THREE.SphereGeometry(0.138, 24, 24, 0, Math.PI * 2, 0, Math.PI * 0.5), materials.headwear);
-      beanieDome.position.set(0, 0.13, 0);
-      beanieMesh.add(beanieDome);
-      headwearMount.add(beanieMesh);
-      garmentRegistry.headwear['beanie_knit'] = beanieMesh;
-
-      // Wool Fedora
-      const fedoraMesh = new THREE.Group();
-      fedoraMesh.name = "fedora_felt";
-      const fedoraCrown = new THREE.Mesh(new THREE.CylinderGeometry(0.115, 0.130, 0.10, 24), materials.headwear);
-      fedoraCrown.position.set(0, 0.08, 0);
-      fedoraMesh.add(fedoraCrown);
-      const fedoraBrim = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.012, 28), materials.headwear);
-      fedoraBrim.position.set(0, 0.035, 0);
-      fedoraMesh.add(fedoraBrim);
-      headwearMount.add(fedoraMesh);
-      garmentRegistry.headwear['fedora_felt'] = fedoraMesh;
-
-      // Leather Beret
-      const beretMesh = new THREE.Group();
-      beretMesh.name = "beret_leather";
-      const beretDisc = new THREE.Mesh(new THREE.CylinderGeometry(0.19, 0.13, 0.045, 28), materials.headwear);
-      beretDisc.position.set(0.02, 0.08, 0);
-      beretDisc.rotation.z = -0.15;
-      beretMesh.add(beretDisc);
-      headwearMount.add(beretMesh);
-      garmentRegistry.headwear['beret_leather'] = beretMesh;
-
-      const noneHead = new THREE.Group();
-      noneHead.name = "none";
-      headwearMount.add(noneHead);
-      garmentRegistry.headwear['none'] = noneHead;
-
-      headGroup.add(headwearMount);
-      avatarGroup.add(headGroup);
-
-      // 3. TORSO & ANATOMICAL CORE (Cel-Shaded Stylized Proportions)
-      const torsoGroup = new THREE.Group();
-      torsoGroup.position.set(0, 1.42, 0);
-
-      // Stylized Neck
-      const neckGeo = new THREE.CylinderGeometry(0.052 * wMult, 0.062 * wMult, 0.14, 24);
-      const neck = new THREE.Mesh(neckGeo, materials.skin);
-      neck.position.set(0, 0.35, 0);
-      torsoGroup.add(neck);
-
-      // Stylized Chest & Ribcage
-      const chestGeo = new THREE.CylinderGeometry(0.170 * wMult, 0.145 * wMult, 0.32, 28);
-      chestGeo.scale(1.0, 1.0, 0.72);
-      const chest = new THREE.Mesh(chestGeo, materials.skin);
-      chest.position.set(0, 0.16, 0);
-      chest.castShadow = true;
-      torsoGroup.add(chest);
-
-      // Stylized Waist & Abdomen
-      const waistGeo = new THREE.CylinderGeometry(0.145 * wMult, 0.155 * wMult, 0.24, 28);
-      waistGeo.scale(1.0, 1.0, 0.72);
-      const waist = new THREE.Mesh(waistGeo, materials.skin);
-      waist.position.set(0, -0.10, 0);
-      torsoGroup.add(waist);
-
-      // 4. MODULAR SNAP-ON TOPS
-      const topMount = new THREE.Group();
-      topMount.name = "top_mount";
-
-      // A) Oversized Street Hoodie
-      const hoodieMesh = new THREE.Group();
-      hoodieMesh.name = "hoodie_oversized";
-      const hoodieTorso = new THREE.Mesh(new THREE.CylinderGeometry(0.190 * wMult, 0.175 * wMult, 0.52, 28), materials.top);
-      hoodieTorso.scale.set(1.04, 1.0, 0.82);
-      hoodieTorso.position.set(0, 0.08, 0);
-      hoodieMesh.add(hoodieTorso);
-      // Front Kangaroo Pouch Pocket
-      const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.16 * wMult, 0.10, 0.03), materials.top);
-      pocket.position.set(0, -0.06, 0.13 * wMult);
-      hoodieMesh.add(pocket);
-      // Back Hood
-      const hoodBack = new THREE.Mesh(new THREE.SphereGeometry(0.12 * wMult, 18, 18), materials.top);
-      hoodBack.scale.set(0.9, 1.2, 0.7);
-      hoodBack.position.set(0, 0.24, -0.10);
-      hoodieMesh.add(hoodBack);
-      topMount.add(hoodieMesh);
-      garmentRegistry.top['hoodie_oversized'] = hoodieMesh;
-
-      // B) Tailored Wool Blazer
-      const blazerMesh = new THREE.Group();
-      blazerMesh.name = "blazer_tailored";
-      const blazerBody = new THREE.Mesh(new THREE.CylinderGeometry(0.185 * wMult, 0.165 * wMult, 0.54, 28), materials.top);
-      blazerBody.scale.set(1.02, 1.0, 0.80);
-      blazerBody.position.set(0, 0.06, 0);
-      blazerMesh.add(blazerBody);
-      // Notched Lapels
-      [-1, 1].forEach(side => {
-        const lapel = new THREE.Mesh(new THREE.BoxGeometry(0.06 * wMult, 0.22, 0.02), materials.top);
-        lapel.position.set(side * 0.08 * wMult, 0.14, 0.12 * wMult);
-        lapel.rotation.z = side * -0.15;
-        blazerMesh.add(lapel);
-      });
-      topMount.add(blazerMesh);
-      garmentRegistry.top['blazer_tailored'] = blazerMesh;
-
-      // C) Boxy Minimalist Tee
-      const teeMesh = new THREE.Group();
-      teeMesh.name = "tee_boxy";
-      const teeBody = new THREE.Mesh(new THREE.CylinderGeometry(0.178 * wMult, 0.162 * wMult, 0.46, 28), materials.top);
-      teeBody.scale.set(1.0, 1.0, 0.76);
-      teeBody.position.set(0, 0.08, 0);
-      teeMesh.add(teeBody);
-      topMount.add(teeMesh);
-      garmentRegistry.top['tee_boxy'] = teeMesh;
-
-      // D) Varsity Bomber Jacket
-      const varsityMesh = new THREE.Group();
-      varsityMesh.name = "jacket_varsity";
-      const varsityBody = new THREE.Mesh(new THREE.CylinderGeometry(0.188 * wMult, 0.165 * wMult, 0.48, 28), materials.top);
-      varsityBody.scale.set(1.05, 1.0, 0.82);
-      varsityBody.position.set(0, 0.07, 0);
-      varsityMesh.add(varsityBody);
-      topMount.add(varsityMesh);
-      garmentRegistry.top['jacket_varsity'] = varsityMesh;
-
-      // E) Polo Knit
-      const poloMesh = new THREE.Group();
-      poloMesh.name = "polo_knit";
-      const poloBody = new THREE.Mesh(new THREE.CylinderGeometry(0.174 * wMult, 0.158 * wMult, 0.45, 28), materials.top);
-      poloBody.scale.set(1.0, 1.0, 0.76);
-      poloBody.position.set(0, 0.08, 0);
-      poloMesh.add(poloBody);
-      topMount.add(poloMesh);
-      garmentRegistry.top['polo_knit'] = poloMesh;
-
-      // F) Ribbed Athletic Tank
-      const tankMesh = new THREE.Group();
-      tankMesh.name = "tank_ribbed";
-      const tankBody = new THREE.Mesh(new THREE.CylinderGeometry(0.170 * wMult, 0.150 * wMult, 0.42, 28), materials.top);
-      tankBody.scale.set(0.98, 1.0, 0.74);
-      tankBody.position.set(0, 0.08, 0);
-      tankMesh.add(tankBody);
-      topMount.add(tankMesh);
-      garmentRegistry.top['tank_ribbed'] = tankMesh;
-
-      torsoGroup.add(topMount);
-
-      // 5. STYLIZED MODULAR ARMS & SLEEVES
-      [-1, 1].forEach(side => {
-        const armGroup = new THREE.Group();
-        armGroup.position.set(side * 0.22 * wMult, 0.24, 0);
-
-        // Rounded Stylized Deltoid Shoulder
-        const shoulder = new THREE.Mesh(new THREE.SphereGeometry(0.065 * wMult, 20, 20), materials.skin);
-        shoulder.position.set(0, 0, 0);
-        armGroup.add(shoulder);
-
-        // Upper Arm
-        const upperArm = new THREE.Mesh(new THREE.CylinderGeometry(0.048 * wMult, 0.042 * wMult, 0.28, 24), materials.skin);
-        upperArm.position.set(0, -0.15, 0);
-        upperArm.rotation.z = side * -0.08;
-        armGroup.add(upperArm);
-
-        // Smooth Rounded Elbow
-        const elbow = new THREE.Mesh(new THREE.SphereGeometry(0.042 * wMult, 16, 16), materials.skin);
-        elbow.position.set(side * 0.012, -0.30, 0);
-        armGroup.add(elbow);
-
-        // Forearm tapering to wrist
-        const forearm = new THREE.Mesh(new THREE.CylinderGeometry(0.040 * wMult, 0.034 * wMult, 0.26, 24), materials.skin);
-        forearm.position.set(side * 0.018, -0.44, 0.02);
-        armGroup.add(forearm);
-
-        // Stylized Bitmoji Hand (Sculpted Palm + Articulated Thumb)
-        const hand = new THREE.Group();
-        hand.position.set(side * 0.022, -0.60, 0.03);
-
-        const palm = new THREE.Mesh(new THREE.SphereGeometry(0.036 * wMult, 18, 18), materials.skin);
-        palm.scale.set(0.85, 1.25, 0.65);
-        hand.add(palm);
-
-        // Thumb
-        const thumb = new THREE.Mesh(new THREE.CylinderGeometry(0.012 * wMult, 0.010 * wMult, 0.038, 12), materials.skin);
-        thumb.position.set(side * -0.024 * wMult, 0.012, 0.02);
-        thumb.rotation.z = side * -0.45;
-        thumb.rotation.x = 0.35;
-        hand.add(thumb);
-
-        // Fingers Mitt/Cluster
-        const fingers = new THREE.Mesh(new THREE.CylinderGeometry(0.024 * wMult, 0.018 * wMult, 0.042, 16), materials.skin);
-        fingers.position.set(0, -0.042, 0);
-        hand.add(fingers);
-
-        armGroup.add(hand);
-        torsoGroup.add(armGroup);
-      });
-
-      avatarGroup.add(torsoGroup);
-
-      // 6. LOWER BODY: BOXERS, PANTS & LEGS
-      const lowerBodyGroup = new THREE.Group();
-      lowerBodyGroup.position.set(0, 1.12, 0);
-
-      // Base Designer Boxers (Trunks)
-      const boxerGroup = new THREE.Group();
-      boxerGroup.name = "boxer_base";
-      const waistband = new THREE.Mesh(new THREE.CylinderGeometry(0.165 * wMult, 0.166 * wMult, 0.045, 28), materials.accessories);
-      waistband.position.set(0, 0.08, 0);
-      boxerGroup.add(waistband);
-      const boxerTrunks = new THREE.Mesh(new THREE.CylinderGeometry(0.162 * wMult, 0.170 * wMult, 0.16, 28), materials.boxer);
-      boxerTrunks.position.set(0, -0.02, 0);
-      boxerGroup.add(boxerTrunks);
-      lowerBodyGroup.add(boxerGroup);
-
-      // MODULAR BOTTOM GARMENTS
-      const bottomMount = new THREE.Group();
-      bottomMount.name = "bottom_mount";
-
-      // A) Baggy Denim Jeans
-      const jeansMesh = new THREE.Group();
-      jeansMesh.name = "jeans_baggy";
-      [-1, 1].forEach(side => {
-        const jeanLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.092 * wMult, 0.082 * wMult, 0.85, 24), materials.bottom);
-        jeanLeg.position.set(side * 0.115 * wMult, -0.38, 0);
-        jeansMesh.add(jeanLeg);
-      });
-      bottomMount.add(jeansMesh);
-      garmentRegistry.bottom['jeans_baggy'] = jeansMesh;
-
-      // B) Pleated Wide-Leg Trousers
-      const trousersMesh = new THREE.Group();
-      trousersMesh.name = "trousers_wide";
-      [-1, 1].forEach(side => {
-        const trouserLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.096 * wMult, 0.088 * wMult, 0.86, 24), materials.bottom);
-        trouserLeg.position.set(side * 0.115 * wMult, -0.38, 0);
-        trousersMesh.add(trouserLeg);
-      });
-      bottomMount.add(trousersMesh);
-      garmentRegistry.bottom['trousers_wide'] = trousersMesh;
-
-      // C) Utility Cargo Pants
-      const cargoMesh = new THREE.Group();
-      cargoMesh.name = "cargo_pants";
-      [-1, 1].forEach(side => {
-        const cargoLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.090 * wMult, 0.080 * wMult, 0.85, 24), materials.bottom);
-        cargoLeg.position.set(side * 0.115 * wMult, -0.38, 0);
-        cargoMesh.add(cargoLeg);
-        // Side Cargo Flap Pocket
-        const pocket = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.09, 0.08), materials.bottom);
-        pocket.position.set(side * 0.19 * wMult, -0.36, 0);
-        cargoMesh.add(pocket);
-      });
-      bottomMount.add(cargoMesh);
-      garmentRegistry.bottom['cargo_pants'] = cargoMesh;
-
-      // D) Designer Boxer Trunks Only
-      const shortsBoxerMesh = new THREE.Group();
-      shortsBoxerMesh.name = "shorts_boxer";
-      const shortWaist = new THREE.Mesh(new THREE.CylinderGeometry(0.168 * wMult, 0.170 * wMult, 0.05, 28), materials.accessories);
-      shortWaist.position.set(0, 0.08, 0);
-      shortsBoxerMesh.add(shortWaist);
-      const shortBody = new THREE.Mesh(new THREE.CylinderGeometry(0.166 * wMult, 0.174 * wMult, 0.18, 28), materials.bottom);
-      shortBody.position.set(0, -0.03, 0);
-      shortsBoxerMesh.add(shortBody);
-      bottomMount.add(shortsBoxerMesh);
-      garmentRegistry.bottom['shorts_boxer'] = shortsBoxerMesh;
-
-      // E) Relaxed Joggers
-      const joggersMesh = new THREE.Group();
-      joggersMesh.name = "joggers_sport";
-      [-1, 1].forEach(side => {
-        const joggerLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.088 * wMult, 0.058 * wMult, 0.84, 24), materials.bottom);
-        joggerLeg.position.set(side * 0.115 * wMult, -0.38, 0);
-        joggersMesh.add(joggerLeg);
-      });
-      bottomMount.add(joggersMesh);
-      garmentRegistry.bottom['joggers_sport'] = joggersMesh;
-
-      lowerBodyGroup.add(bottomMount);
-
-      // Bare Legs Anatomy (Visible under shorts/boxers or for footwear mounting)
-      [-1, 1].forEach(side => {
-        const legGroup = new THREE.Group();
-        legGroup.position.set(side * 0.115 * wMult, 0, 0);
-
-        // Bare Thigh
-        const thigh = new THREE.Mesh(new THREE.CylinderGeometry(0.076 * wMult, 0.058 * wMult, 0.40, 24), materials.skin);
-        thigh.position.set(0, -0.22, 0);
-        legGroup.add(thigh);
-
-        // Knee Cap
-        const knee = new THREE.Mesh(new THREE.SphereGeometry(0.048 * wMult, 18, 18), materials.skin);
-        knee.position.set(0, -0.42, 0.015);
-        legGroup.add(knee);
-
-        // Lower Leg Shin & Calf
-        const lowerLeg = new THREE.Mesh(new THREE.CylinderGeometry(0.054 * wMult, 0.036 * wMult, 0.44, 24), materials.skin);
-        lowerLeg.position.set(0, -0.66, 0);
-        legGroup.add(lowerLeg);
-
-        // 7. MODULAR FOOTWEAR
-        const footMount = new THREE.Group();
-        footMount.position.set(0, -0.92, 0.02);
-
-        // Chunky Retro Sneakers
-        const sneakers = new THREE.Group();
-        sneakers.name = "sneakers_chunky";
-        const snkSole = new THREE.Mesh(new THREE.BoxGeometry(0.082 * wMult, 0.045, 0.19), materials.shoes);
-        snkSole.position.set(0, 0.022, 0.02);
-        sneakers.add(snkSole);
-        const snkUpper = new THREE.Mesh(new THREE.SphereGeometry(0.046 * wMult, 16, 16), materials.shoes);
-        snkUpper.scale.set(0.9, 0.8, 1.5);
-        snkUpper.position.set(0, 0.045, 0.02);
-        sneakers.add(snkUpper);
-        footMount.add(sneakers);
-        if (!garmentRegistry.footwear['sneakers_chunky']) garmentRegistry.footwear['sneakers_chunky'] = [];
-        garmentRegistry.footwear['sneakers_chunky'].push(sneakers);
-
-        // Platform Loafers
-        const loafers = new THREE.Group();
-        loafers.name = "loafers_platform";
-        const loaferSole = new THREE.Mesh(new THREE.BoxGeometry(0.078 * wMult, 0.040, 0.18), materials.shoes);
-        loaferSole.position.set(0, 0.02, 0.02);
-        loafers.add(loaferSole);
-        footMount.add(loafers);
-        if (!garmentRegistry.footwear['loafers_platform']) garmentRegistry.footwear['loafers_platform'] = [];
-        garmentRegistry.footwear['loafers_platform'].push(loafers);
-
-        // Chelsea Boots
-        const boots = new THREE.Group();
-        boots.name = "boots_chelsea";
-        const bootShaft = new THREE.Mesh(new THREE.CylinderGeometry(0.046 * wMult, 0.042 * wMult, 0.16, 20), materials.shoes);
-        bootShaft.position.set(0, 0.08, 0);
-        boots.add(bootShaft);
-        const bootFoot = new THREE.Mesh(new THREE.BoxGeometry(0.076 * wMult, 0.038, 0.18), materials.shoes);
-        bootFoot.position.set(0, 0.019, 0.02);
-        boots.add(bootFoot);
-        footMount.add(boots);
-        if (!garmentRegistry.footwear['boots_chelsea']) garmentRegistry.footwear['boots_chelsea'] = [];
-        garmentRegistry.footwear['boots_chelsea'].push(boots);
-
-        // Derby Shoes
-        const derbies = new THREE.Group();
-        derbies.name = "derby_shoes";
-        const derbyFoot = new THREE.Mesh(new THREE.BoxGeometry(0.074 * wMult, 0.034, 0.175), materials.shoes);
-        derbyFoot.position.set(0, 0.017, 0.02);
-        derbies.add(derbyFoot);
-        footMount.add(derbies);
-        if (!garmentRegistry.footwear['derby_shoes']) garmentRegistry.footwear['derby_shoes'] = [];
-        garmentRegistry.footwear['derby_shoes'].push(derbies);
-
-        // Bare Sculpted Feet
-        const bareFeet = new THREE.Group();
-        bareFeet.name = "bare_feet";
-        const footInstep = new THREE.Mesh(new THREE.SphereGeometry(0.038 * wMult, 18, 18), materials.skin);
-        footInstep.scale.set(0.85, 0.65, 1.45);
-        footInstep.position.set(0, 0.02, 0.015);
-        bareFeet.add(footInstep);
-        footMount.add(bareFeet);
-        if (!garmentRegistry.footwear['bare_feet']) garmentRegistry.footwear['bare_feet'] = [];
-        garmentRegistry.footwear['bare_feet'].push(bareFeet);
-
-        legGroup.add(footMount);
-        lowerBodyGroup.add(legGroup);
-      });
-
-      avatarGroup.add(lowerBodyGroup);
-
-      // 8. ACCESSORIES (Chain, Crossbody, Glasses)
-      const accMount = new THREE.Group();
-      accMount.name = "acc_mount";
-
-      // 24K Gold Cuban Chain
-      const chainMesh = new THREE.Mesh(new THREE.TorusGeometry(0.082 * wMult, 0.008, 12, 28), materials.accessories);
-      chainMesh.name = "chain_gold";
-      chainMesh.position.set(0, 1.76, 0.04);
-      chainMesh.rotation.x = Math.PI * 0.40;
-      accMount.add(chainMesh);
-      garmentRegistry.accessories['chain_gold'] = chainMesh;
-
-      // Crossbody Leather Pouch
-      const bagMesh = new THREE.Group();
-      bagMesh.name = "bag_crossbody";
-      const pouch = new THREE.Mesh(new THREE.BoxGeometry(0.12 * wMult, 0.15, 0.04), materials.accessories);
-      pouch.position.set(0.10 * wMult, 1.34, 0.14 * wMult);
-      pouch.rotation.z = -0.15;
-      bagMesh.add(pouch);
-      const strap = new THREE.Mesh(new THREE.TorusGeometry(0.24 * wMult, 0.006, 8, 28), materials.accessories);
-      strap.position.set(0, 1.55, 0);
-      strap.rotation.x = Math.PI * 0.45;
-      strap.rotation.y = 0.35;
-      bagMesh.add(strap);
-      accMount.add(bagMesh);
-      garmentRegistry.accessories['bag_crossbody'] = bagMesh;
-
-      // Acetate Fashion Shades
-      const shadesMesh = new THREE.Group();
-      shadesMesh.name = "glasses_shades";
-      const glassesBar = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.024, 0.015), materials.accessories);
-      glassesBar.position.set(0, 1.84, 0.125);
-      shadesMesh.add(glassesBar);
-      accMount.add(shadesMesh);
-      garmentRegistry.accessories['glasses_shades'] = shadesMesh;
-
-      avatarGroup.add(accMount);
-
-      // Apply initial active garments visibility
-      applyGarmentVisibility();
-
-      scene.add(avatarGroup);
-    }
-
-    function applyGarmentVisibility() {
-      // Top
-      Object.keys(garmentRegistry.top).forEach(name => {
-        const obj = garmentRegistry.top[name];
-        if (obj) obj.visible = (name === state.activeGarments.top);
-      });
-
-      // Bottom
-      Object.keys(garmentRegistry.bottom).forEach(name => {
-        const obj = garmentRegistry.bottom[name];
-        if (obj) obj.visible = (name === state.activeGarments.bottom);
-      });
-
-      // Headwear
-      Object.keys(garmentRegistry.headwear).forEach(name => {
-        const obj = garmentRegistry.headwear[name];
-        if (obj) obj.visible = (name === state.activeGarments.headwear);
-      });
-
-      // Footwear
-      Object.keys(garmentRegistry.footwear).forEach(name => {
-        const list = garmentRegistry.footwear[name];
-        if (Array.isArray(list)) {
-          list.forEach(item => item.visible = (name === state.activeGarments.footwear));
+    function loadGLBModel(gender) {
+      const statusEl = document.getElementById('status-indicator');
+      if (statusEl) {
+        statusEl.innerText = 'Loading Model...';
+        statusEl.style.opacity = '1';
+      }
+
+      const fileName = (gender === 'male') ? 'models/mannequin_male.glb' : 'models/mannequin_female.glb';
+      const loader = new THREE.GLTFLoader();
+
+      loader.load(
+        fileName,
+        function (gltf) {
+          if (currentModelGroup) scene.remove(currentModelGroup);
+
+          // Reset categorizations
+          for (let key in categorizedMaterials) {
+            categorizedMaterials[key] = [];
+          }
+
+          currentModelGroup = gltf.scene;
+
+          // Compute bounding box to auto-center and normalize scale
+          const box = new THREE.Box3().setFromObject(currentModelGroup);
+          const size = box.getSize(new THREE.Vector3());
+          const center = box.getCenter(new THREE.Vector3());
+
+          // Standardize model height to roughly 1.75m
+          const targetHeight = 1.75;
+          const scaleFactor = targetHeight / (size.y || 1);
+          currentModelGroup.scale.setScalar(scaleFactor);
+
+          // Center horizontally and ground feet onto podium
+          currentModelGroup.position.x = -center.x * scaleFactor;
+          currentModelGroup.position.z = -center.z * scaleFactor;
+          currentModelGroup.position.y = -box.min.y * scaleFactor + 0.06;
+
+          // Traverse meshes and map materials
+          currentModelGroup.traverse((child) => {
+            if (child.isMesh) {
+              child.castShadow = true;
+              child.receiveShadow = true;
+
+              if (child.material) {
+                // Clone material so recoloring doesn't cause texture conflicts
+                if (Array.isArray(child.material)) {
+                  child.material = child.material.map(m => m.clone());
+                  child.material.forEach(m => categorizeMaterial(m, child.name));
+                } else {
+                  child.material = child.material.clone();
+                  categorizeMaterial(child.material, child.name);
+                }
+              }
+            }
+          });
+
+          // Re-apply any currently selected custom colors
+          reapplyColors();
+
+          currentModelGroup.rotation.y = state.rotation;
+          scene.add(currentModelGroup);
+
+          if (statusEl) statusEl.style.opacity = '0';
+          updateBadge();
+        },
+        undefined,
+        function (error) {
+          console.error('Error loading GLB asset:', error);
+          if (statusEl) statusEl.innerText = 'Model Load Failed';
         }
-      });
+      );
+    }
 
-      // Accessories
-      Object.keys(garmentRegistry.accessories).forEach(name => {
-        const obj = garmentRegistry.accessories[name];
-        if (obj) obj.visible = (name === state.activeGarments.accessories);
+    // Heuristically map materials by mesh or material name
+    function categorizeMaterial(mat, meshName) {
+      const name = ((mat.name || '') + ' ' + (meshName || '')).toLowerCase();
+
+      if (name.includes('skin') || name.includes('body') || name.includes('face') || name.includes('head')) {
+        categorizedMaterials.skin.push(mat);
+      } else if (name.includes('top') || name.includes('shirt') || name.includes('sweat') || name.includes('hoodie')) {
+        categorizedMaterials.top.push(mat);
+      } else if (name.includes('bottom') || name.includes('pant') || name.includes('short') || name.includes('jean')) {
+        categorizedMaterials.bottom.push(mat);
+      } else if (name.includes('shoe') || name.includes('sneaker') || name.includes('foot')) {
+        categorizedMaterials.shoes.push(mat);
+      } else if (name.includes('hair')) {
+        categorizedMaterials.hair.push(mat);
+      } else {
+        categorizedMaterials.general.push(mat);
+      }
+    }
+
+    function reapplyColors() {
+      if (state.skinTone) applyColorToCategory('skin', state.skinTone);
+      if (state.colors.top) applyColorToCategory('top', state.colors.top);
+      if (state.colors.bottom) applyColorToCategory('bottom', state.colors.bottom);
+      if (state.colors.shoes) applyColorToCategory('shoes', state.colors.shoes);
+    }
+
+    function applyColorToCategory(category, hex) {
+      const list = categorizedMaterials[category];
+      if (!list || list.length === 0) return;
+
+      const col = new THREE.Color(hex);
+      list.forEach(mat => {
+        mat.color.copy(col);
+        mat.needsUpdate = true;
       });
     }
 
     // ==========================================
-    // TURNTABLE ROTATION & TOUCH GESTURES
+    // EXPOSED HOOKS (Triggered from Compose/Kotlin)
+    // ==========================================
+    window.setGender = function(gender) {
+      if (!gender || gender.toLowerCase() === state.gender) return;
+      state.gender = gender.toLowerCase();
+      loadGLBModel(state.gender);
+    };
+
+    window.setBodyType = function(type) {
+      if (!type) return;
+      state.bodyType = type.toLowerCase();
+      updateBadge();
+
+      if (currentModelGroup) {
+        // Subtle proportion adjustment
+        const widthMult = (state.bodyType === 'athletic') ? 1.08 :
+                          (state.bodyType === 'broad') ? 1.15 :
+                          (state.bodyType === 'slim') ? 0.94 : 1.0;
+        currentModelGroup.scale.x = currentModelGroup.scale.y * widthMult;
+        currentModelGroup.scale.z = currentModelGroup.scale.y * widthMult;
+      }
+    };
+
+    window.setGarmentColor = function(category, hex) {
+      if (!category || !hex) return;
+      const cat = category.toLowerCase();
+      state.colors[cat] = hex;
+      applyColorToCategory(cat, hex);
+    };
+
+    window.setSkinTone = function(hex) {
+      if (!hex) return;
+      state.skinTone = hex;
+      applyColorToCategory('skin', hex);
+    };
+
+    window.updateColors = function(topHex, bottomHex, shoesHex, headHex, accHex, skinHex) {
+      if (topHex) { state.colors.top = topHex; applyColorToCategory('top', topHex); }
+      if (bottomHex) { state.colors.bottom = bottomHex; applyColorToCategory('bottom', bottomHex); }
+      if (shoesHex) { state.colors.shoes = shoesHex; applyColorToCategory('shoes', shoesHex); }
+      if (skinHex) { state.skinTone = skinHex; applyColorToCategory('skin', skinHex); }
+    };
+
+    window.setRotation = function(degrees) {
+      state.rotation = (degrees * Math.PI) / 180;
+      if (currentModelGroup) currentModelGroup.rotation.y = state.rotation;
+    };
+
+    window.setTheme = function(isDark) {
+      state.isDark = isDark;
+      if (isDark) {
+        document.body.classList.remove('light-mode');
+        if (scene) scene.background = new THREE.Color(0x111111);
+      } else {
+        document.body.classList.add('light-mode');
+        if (scene) scene.background = new THREE.Color(0xFAFAFA);
+      }
+    };
+
+    function updateBadge() {
+      const label = document.getElementById('model-label');
+      if (label) {
+        label.innerText = `${state.gender.toUpperCase()} • ${state.bodyType.toUpperCase()}`;
+      }
+    }
+
+    // ==========================================
+    // TOUCH INTERACTIONS & ANIMATION LOOP
     // ==========================================
     function bindPointerEvents(element) {
       element.addEventListener('pointerdown', (e) => {
@@ -925,11 +444,21 @@
         previousTouchX = e.clientX;
         touchVelocity = deltaX * 0.008;
         state.rotation += touchVelocity;
-        if (avatarGroup) avatarGroup.rotation.y = state.rotation;
+        if (currentModelGroup) currentModelGroup.rotation.y = state.rotation;
       });
 
       window.addEventListener('pointerup', () => { isDragging = false; });
       window.addEventListener('pointercancel', () => { isDragging = false; });
+    }
+
+    function onWindowResize() {
+      const container = document.getElementById('canvas-container');
+      if (!container || !renderer || !camera) return;
+      const w = container.clientWidth || window.innerWidth;
+      const h = container.clientHeight || window.innerHeight;
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setSize(w, h);
     }
 
     function animate() {
@@ -939,197 +468,11 @@
       if (!isDragging && Math.abs(touchVelocity) > 0.0001) {
         touchVelocity *= 0.92;
         state.rotation += touchVelocity;
-        if (avatarGroup) avatarGroup.rotation.y = state.rotation;
+        if (currentModelGroup) currentModelGroup.rotation.y = state.rotation;
       }
 
-      if (webglRenderer && scene && camera) {
-        webglRenderer.render(scene, camera);
-      }
-    }
-
-    // ==========================================
-    // EXPOSED JAVASCRIPT HOOKS (Called from Kotlin)
-    // ==========================================
-    window.setGender = function(gender) {
-      if (!gender) return;
-      state.gender = gender.toLowerCase();
-      updateModelBadge();
-      if (activeEngine === 'webgl') buildBitmojiAvatar();
-      else renderCanvas2D();
-    };
-
-    window.setBodyType = function(type) {
-      if (!type) return;
-      state.bodyType = type.toLowerCase();
-      updateModelBadge();
-      if (activeEngine === 'webgl') buildBitmojiAvatar();
-      else renderCanvas2D();
-    };
-
-    window.setGarment = function(category, meshName) {
-      if (!category || !meshName) return;
-      state.activeGarments[category.toLowerCase()] = meshName.toLowerCase();
-      if (activeEngine === 'webgl') {
-        applyGarmentVisibility();
-      } else {
-        renderCanvas2D();
-      }
-    };
-
-    window.setGarmentColor = function(category, hex) {
-      if (!category || !hex) return;
-      const cat = category.toLowerCase();
-      state.colors[cat] = hex;
-      if (activeEngine === 'webgl') {
-        if (materials[cat]) materials[cat].color.set(hex);
-      } else {
-        renderCanvas2D();
-      }
-    };
-
-    window.setRotation = function(degrees) {
-      state.rotation = (degrees * Math.PI) / 180;
-      if (avatarGroup) avatarGroup.rotation.y = state.rotation;
-      if (activeEngine === 'canvas2d') renderCanvas2D();
-    };
-
-    window.setSkinTone = function(hex) {
-      if (!hex) return;
-      state.skinTone = hex;
-      if (activeEngine === 'webgl') {
-        if (materials.skin) materials.skin.color.set(hex);
-      } else {
-        renderCanvas2D();
-      }
-    };
-
-    window.setTheme = function(isDark) {
-      state.isDark = isDark;
-      if (isDark) {
-        document.body.classList.remove('light-mode');
-        if (scene) scene.background = new THREE.Color(0x111111);
-        if (materials.stage) materials.stage.color.set(0x1A1A1A);
-      } else {
-        document.body.classList.add('light-mode');
-        if (scene) scene.background = new THREE.Color(0xFAFAFA);
-        if (materials.stage) materials.stage.color.set(0xFFFFFF);
-      }
-      if (activeEngine === 'canvas2d') renderCanvas2D();
-    };
-
-    window.updateColors = function(topHex, bottomHex, shoesHex, headwearHex, accHex, skinHex) {
-      if (topHex) state.colors.top = topHex;
-      if (bottomHex) state.colors.bottom = bottomHex;
-      if (shoesHex) state.colors.shoes = shoesHex;
-      if (headwearHex) state.colors.headwear = headwearHex;
-      if (accHex) state.colors.accessories = accHex;
-      if (skinHex) state.skinTone = skinHex;
-
-      if (activeEngine === 'webgl') {
-        if (materials.top && topHex) materials.top.color.set(topHex);
-        if (materials.bottom && bottomHex) materials.bottom.color.set(bottomHex);
-        if (materials.shoes && shoesHex) materials.shoes.color.set(shoesHex);
-        if (materials.headwear && headwearHex) materials.headwear.color.set(headwearHex);
-        if (materials.accessories && accHex) materials.accessories.color.set(accHex);
-        if (materials.skin && skinHex) materials.skin.color.set(skinHex);
-      } else {
-        renderCanvas2D();
-      }
-    };
-
-    window.loadModel = function(gender, bodyType) {
-      if (gender) state.gender = gender.toLowerCase();
-      if (bodyType) state.bodyType = bodyType.toLowerCase();
-      updateModelBadge();
-      if (activeEngine === 'webgl') buildBitmojiAvatar();
-      else renderCanvas2D();
-    };
-
-    function updateModelBadge() {
-      const label = document.getElementById('model-label');
-      if (label) {
-        label.innerText = `${state.gender.toUpperCase()} • ${state.bodyType.toUpperCase()}`;
-      }
-    }
-
-    // ==========================================
-    // CANVAS 2D FALLBACK ENGINE
-    // ==========================================
-    let canvas2d, ctx2d;
-    function initCanvas2D(container) {
-      canvas2d = document.createElement('canvas');
-      canvas2d.width = container.clientWidth || 360;
-      canvas2d.height = container.clientHeight || 540;
-      container.appendChild(canvas2d);
-      ctx2d = canvas2d.getContext('2d');
-      bindPointerEvents(canvas2d);
-      renderCanvas2D();
-    }
-
-    function renderCanvas2D() {
-      if (!ctx2d || !canvas2d) return;
-      const w = canvas2d.width;
-      const h = canvas2d.height;
-      ctx2d.clearRect(0, 0, w, h);
-
-      // Background
-      ctx2d.fillStyle = state.isDark ? '#111111' : '#FAFAFA';
-      ctx2d.fillRect(0, 0, w, h);
-
-      const cx = w * 0.5;
-      const baseY = h * 0.88;
-
-      // Stylized Podium
-      ctx2d.fillStyle = state.isDark ? '#1A1A1A' : '#FFFFFF';
-      ctx2d.beginPath();
-      ctx2d.ellipse(cx, baseY, 120, 22, 0, 0, Math.PI * 2);
-      ctx2d.fill();
-      ctx2d.strokeStyle = '#D4AF37';
-      ctx2d.lineWidth = 2;
-      ctx2d.stroke();
-
-      // Stylized Legs
-      ctx2d.fillStyle = (state.activeGarments.bottom === 'shorts_boxer') ? state.skinTone : state.colors.bottom;
-      ctx2d.fillRect(cx - 36, baseY - 180, 28, 160);
-      ctx2d.fillRect(cx + 8, baseY - 180, 28, 160);
-
-      // Footwear
-      ctx2d.fillStyle = state.colors.shoes;
-      ctx2d.beginPath();
-      ctx2d.ellipse(cx - 22, baseY - 10, 20, 10, 0, 0, Math.PI * 2);
-      ctx2d.ellipse(cx + 22, baseY - 10, 20, 10, 0, 0, Math.PI * 2);
-      ctx2d.fill();
-
-      // Torso / Top Garment
-      ctx2d.fillStyle = state.colors.top;
-      ctx2d.fillRect(cx - 48, baseY - 310, 96, 140);
-
-      // Neck & Head
-      ctx2d.fillStyle = state.skinTone;
-      ctx2d.fillRect(cx - 14, baseY - 340, 28, 35);
-      ctx2d.beginPath();
-      ctx2d.ellipse(cx, baseY - 380, 38, 48, 0, 0, Math.PI * 2);
-      ctx2d.fill();
-
-      // Expressive Stylized Eyes
-      ctx2d.fillStyle = '#FFFFFF';
-      ctx2d.beginPath();
-      ctx2d.ellipse(cx - 14, baseY - 385, 7, 5, 0, 0, Math.PI * 2);
-      ctx2d.ellipse(cx + 14, baseY - 385, 7, 5, 0, 0, Math.PI * 2);
-      ctx2d.fill();
-      ctx2d.fillStyle = '#1A1412';
-      ctx2d.beginPath();
-      ctx2d.arc(cx - 14, baseY - 385, 3.5, 0, Math.PI * 2);
-      ctx2d.arc(cx + 14, baseY - 385, 3.5, 0, Math.PI * 2);
-      ctx2d.fill();
-
-      // Cap / Headwear
-      if (state.activeGarments.headwear !== 'none') {
-        ctx2d.fillStyle = state.colors.headwear;
-        ctx2d.beginPath();
-        ctx2d.ellipse(cx, baseY - 415, 42, 22, 0, 0, Math.PI * 2);
-        ctx2d.fill();
-        ctx2d.fillRect(cx - 35, baseY - 418, 70, 10);
+      if (renderer && scene && camera) {
+        renderer.render(scene, camera);
       }
     }
 
