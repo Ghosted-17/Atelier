@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, maximum-scale=1.0">
-  <title>Atelier 3D Dressing Room</title>
+  <title>Atelier 3D Runway Studio</title>
   <style>
     * {
       box-sizing: border-box;
@@ -66,16 +66,20 @@
     }
     #status-indicator {
       position: absolute;
-      top: 50%;
+      top: 48%;
       left: 50%;
       transform: translate(-50%, -50%);
-      color: rgba(212, 175, 55, 0.9);
+      color: #D4AF37;
       font-size: 12px;
       letter-spacing: 0.12em;
       text-transform: uppercase;
       font-weight: 600;
       pointer-events: none;
-      transition: opacity 0.4s ease;
+      transition: opacity 0.3s ease;
+      text-align: center;
+      padding: 6px 12px;
+      background: rgba(0, 0, 0, 0.4);
+      border-radius: 12px;
     }
     body.light-mode {
       background-color: #FAFAFA !important;
@@ -115,7 +119,7 @@
     <div id="studio-overlay">
       <div class="badge" id="model-badge">
         <span class="badge-dot"></span>
-        <span id="model-label">FEMALE • REGULAR</span>
+        <span id="model-label">MALE • SLIM</span>
       </div>
     </div>
     <div id="status-indicator">Loading Model...</div>
@@ -126,17 +130,17 @@
 
   <script>
     const state = {
-      gender: 'female',
-      bodyType: 'regular',
+      gender: 'male',
+      bodyType: 'slim',
       rotation: 0,
       isDark: true,
-      skinTone: null,
+      skinTone: '#EEDBC8',
       colors: {
-        top: null,
-        bottom: null,
-        shoes: null,
-        headwear: null,
-        accessories: null
+        top: '#111111',
+        bottom: '#1B263B',
+        shoes: '#F5F5F0',
+        headwear: '#111111',
+        accessories: '#D4AF37'
       }
     };
 
@@ -145,14 +149,12 @@
     let previousTouchX = 0;
     let touchVelocity = 0;
 
-    // Track mesh materials by inferred category
-    const categorizedMaterials = {
+    const materialsByCategory = {
       skin: [],
       top: [],
       bottom: [],
       shoes: [],
-      hair: [],
-      general: []
+      all: []
     };
 
     function init() {
@@ -163,12 +165,14 @@
       scene = new THREE.Scene();
       scene.background = new THREE.Color(state.isDark ? 0x111111 : 0xFAFAFA);
 
-      camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
-      camera.position.set(0, 0.95, 3.2);
-      camera.lookAt(0, 0.75, 0);
+      // Framed to capture head-to-toe on tall mobile viewports
+      camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
+      camera.position.set(0, 1.1, 3.4);
+      camera.lookAt(0, 0.85, 0);
+
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setSize(width, height);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.shadowMap.enabled = true;
       renderer.shadowMap.type = THREE.PCFSoftShadowMap;
       renderer.outputEncoding = THREE.sRGBEncoding;
@@ -178,7 +182,6 @@
       buildStage();
       bindPointerEvents(renderer.domElement);
 
-      // Load initial model (Female by default)
       loadGLBModel(state.gender);
 
       window.addEventListener('resize', onWindowResize);
@@ -189,25 +192,21 @@
       const ambient = new THREE.AmbientLight(0xFFFFFF, 0.85);
       scene.add(ambient);
 
-      // Key Soft Front-Right Light
-      const keyLight = new THREE.DirectionalLight(0xFFFBF0, 1.1);
+      const keyLight = new THREE.DirectionalLight(0xFFFBF0, 1.15);
       keyLight.position.set(2.0, 3.2, 2.5);
       keyLight.castShadow = true;
       keyLight.shadow.mapSize.width = 1024;
       keyLight.shadow.mapSize.height = 1024;
       scene.add(keyLight);
 
-      // Cool Fill Light (Left)
       const fillLight = new THREE.DirectionalLight(0xEDF2F7, 0.6);
       fillLight.position.set(-2.0, 2.0, 2.0);
       scene.add(fillLight);
 
-      // Atelier Signature Gold Rim Light (Right-Back)
-      const goldRim = new THREE.DirectionalLight(0xD4AF37, 1.2);
+      const goldRim = new THREE.DirectionalLight(0xD4AF37, 1.25);
       goldRim.position.set(2.2, 2.4, -2.2);
       scene.add(goldRim);
 
-      // Ice-Blue Accent Rim Light (Left-Back)
       const blueRim = new THREE.DirectionalLight(0x64B5F6, 0.8);
       blueRim.position.set(-2.2, 2.0, -2.2);
       scene.add(blueRim);
@@ -216,7 +215,6 @@
     function buildStage() {
       stageGroup = new THREE.Group();
 
-      // Circular Podium
       const pedestal = new THREE.Mesh(
         new THREE.CylinderGeometry(0.85, 0.9, 0.06, 48),
         new THREE.MeshStandardMaterial({
@@ -229,7 +227,6 @@
       pedestal.receiveShadow = true;
       stageGroup.add(pedestal);
 
-      // Gold Trim Ring
       const rim = new THREE.Mesh(
         new THREE.TorusGeometry(0.87, 0.012, 16, 48),
         new THREE.MeshStandardMaterial({
@@ -246,7 +243,7 @@
     }
 
     // ==========================================
-    // GLTF / GLB MODEL LOADER
+    // ROBUST MODEL LOADER & AUTO-SCALE ENGINE
     // ==========================================
     function loadGLBModel(gender) {
       const statusEl = document.getElementById('status-indicator');
@@ -256,145 +253,126 @@
       }
 
       const basePath = window.location.href.substring(0, window.location.href.lastIndexOf('/') + 1);
-const fileName = basePath + ((gender === 'male') ? 'models/mannequin_male.glb' : 'models/mannequin_female.glb');
+      const fileName = basePath + ((gender === 'male') ? 'models/mannequin_male.glb' : 'models/mannequin_female.glb');
+
       const loader = new THREE.GLTFLoader();
 
       loader.load(
         fileName,
         function (gltf) {
-          if (currentModelGroup) scene.remove(currentModelGroup);
+          try {
+            if (currentModelGroup) scene.remove(currentModelGroup);
 
-          // Reset categorizations
-          for (let key in categorizedMaterials) {
-            categorizedMaterials[key] = [];
-          }
+            for (let cat in materialsByCategory) {
+              materialsByCategory[cat] = [];
+            }
 
-          currentModelGroup = gltf.scene;
+            currentModelGroup = gltf.scene;
 
-// 1. Force bone matrices to calculate accurately
-currentModelGroup.traverse((child) => {
-  if (child.isSkinnedMesh) {
-    child.computeBoundingBox();
-  }
-});
-currentModelGroup.updateMatrixWorld(true);
+            // 1. Gather all meshes and duplicate materials cleanly
+            currentModelGroup.traverse((child) => {
+              if (child.isMesh) {
+                child.castShadow = true;
+                child.receiveShadow = true;
 
-// 2. Measure actual geometric bounds
-let box = new THREE.Box3();
-currentModelGroup.traverse((child) => {
-  if (child.isMesh) {
-    if (child.geometry) {
-      if (!child.geometry.boundingBox) child.geometry.computeBoundingBox();
-      const geomBox = child.geometry.boundingBox.clone();
-      geomBox.applyMatrix4(child.matrixWorld);
-      box.union(geomBox);
-    }
-  }
-});
-
-// Fallback if geometry traversal yields zero
-if (box.isEmpty()) {
-  box.setFromObject(currentModelGroup);
-}
-
-const size = box.getSize(new THREE.Vector3());
-
-// 3. Fallback: If raw height is around 160-190 (centimeters), divide by 100
-let rawHeight = size.y;
-let targetHeight = 1.35; // Ideal height inside mobile viewport
-
-let scaleFactor = 0.009; // Sensible default for ~170cm Mixamo models
-if (rawHeight > 20) {
-  scaleFactor = targetHeight / rawHeight;
-} else if (rawHeight > 0.1) {
-  scaleFactor = targetHeight / rawHeight;
-}
-
-currentModelGroup.scale.setScalar(scaleFactor);
-currentModelGroup.updateMatrixWorld(true);
-
-// 4. Center horizontally and place feet directly on the podium
-const updatedBox = new THREE.Box3().setFromObject(currentModelGroup);
-const center = updatedBox.getCenter(new THREE.Vector3());
-
-currentModelGroup.position.x = -center.x;
-currentModelGroup.position.z = -center.z;
-currentModelGroup.position.y = -updatedBox.min.y + 0.06;
-          // Traverse meshes and map materials
-          currentModelGroup.traverse((child) => {
-            if (child.isMesh) {
-              child.castShadow = true;
-              child.receiveShadow = true;
-
-              if (child.material) {
-                // Clone material so recoloring doesn't cause texture conflicts
-                if (Array.isArray(child.material)) {
-                  child.material = child.material.map(m => m.clone());
-                  child.material.forEach(m => categorizeMaterial(m, child.name));
-                } else {
-                  child.material = child.material.clone();
-                  categorizeMaterial(child.material, child.name);
+                if (child.material) {
+                  if (Array.isArray(child.material)) {
+                    child.material = child.material.map(m => m.clone());
+                    child.material.forEach(m => registerMaterial(m, child.name));
+                  } else {
+                    child.material = child.material.clone();
+                    registerMaterial(child.material, child.name);
+                  }
                 }
               }
+            });
+
+            // 2. Safe Auto-Scale calculation
+            currentModelGroup.scale.set(1, 1, 1);
+            currentModelGroup.position.set(0, 0, 0);
+            currentModelGroup.updateMatrixWorld(true);
+
+            const box = new THREE.Box3().setFromObject(currentModelGroup);
+            const size = box.getSize(new THREE.Vector3());
+            const rawHeight = (size.y > 0) ? size.y : 180;
+
+            // Target roughly 1.55m height inside viewport
+            let scaleFactor = 1.55 / rawHeight;
+
+            // Guard against centimeter scale mismatch
+            if (rawHeight > 20) {
+              scaleFactor = 1.55 / rawHeight;
+            } else if (rawHeight < 0.1) {
+              scaleFactor = 1.55;
             }
-          });
 
-          // Re-apply any currently selected custom colors
-          reapplyColors();
+            currentModelGroup.scale.setScalar(scaleFactor);
+            currentModelGroup.updateMatrixWorld(true);
 
-          currentModelGroup.rotation.y = state.rotation;
-          scene.add(currentModelGroup);
+            // 3. Ground feet cleanly onto the gold podium ring
+            const finalBox = new THREE.Box3().setFromObject(currentModelGroup);
+            const finalCenter = finalBox.getCenter(new THREE.Vector3());
 
-          if (statusEl) statusEl.style.opacity = '0';
-          updateBadge();
+            currentModelGroup.position.x = -finalCenter.x;
+            currentModelGroup.position.z = -finalCenter.z;
+            currentModelGroup.position.y = -finalBox.min.y + 0.06;
+
+            currentModelGroup.rotation.y = state.rotation;
+            scene.add(currentModelGroup);
+
+            // Re-apply any chosen swatches
+            reapplyColors();
+
+            if (statusEl) statusEl.style.opacity = '0';
+            updateBadge();
+          } catch (err) {
+            console.error("Error post-processing loaded model:", err);
+            if (statusEl) statusEl.innerText = "Processing Error";
+          }
         },
         undefined,
-        function (error) {
-          console.error('Error loading GLB asset:', error);
+        function (err) {
+          console.error("GLTF load failed:", err);
+          const statusEl = document.getElementById('status-indicator');
           if (statusEl) statusEl.innerText = 'Model Load Failed';
         }
       );
     }
 
-    // Heuristically map materials by mesh or material name
-    function categorizeMaterial(mat, meshName) {
-      const name = ((mat.name || '') + ' ' + (meshName || '')).toLowerCase();
+    function registerMaterial(mat, meshName) {
+      materialsByCategory.all.push(mat);
+      const str = ((mat.name || '') + ' ' + (meshName || '')).toLowerCase();
 
-      if (name.includes('skin') || name.includes('body') || name.includes('face') || name.includes('head')) {
-        categorizedMaterials.skin.push(mat);
-      } else if (name.includes('top') || name.includes('shirt') || name.includes('sweat') || name.includes('hoodie')) {
-        categorizedMaterials.top.push(mat);
-      } else if (name.includes('bottom') || name.includes('pant') || name.includes('short') || name.includes('jean')) {
-        categorizedMaterials.bottom.push(mat);
-      } else if (name.includes('shoe') || name.includes('sneaker') || name.includes('foot')) {
-        categorizedMaterials.shoes.push(mat);
-      } else if (name.includes('hair')) {
-        categorizedMaterials.hair.push(mat);
-      } else {
-        categorizedMaterials.general.push(mat);
+      if (str.includes('skin') || str.includes('body') || str.includes('face') || str.includes('head')) {
+        materialsByCategory.skin.push(mat);
+      } else if (str.includes('top') || str.includes('shirt') || str.includes('hoodie') || str.includes('sweat')) {
+        materialsByCategory.top.push(mat);
+      } else if (str.includes('bottom') || str.includes('pant') || str.includes('short') || str.includes('jean')) {
+        materialsByCategory.bottom.push(mat);
+      } else if (str.includes('shoe') || str.includes('sneaker') || str.includes('foot')) {
+        materialsByCategory.shoes.push(mat);
       }
     }
 
     function reapplyColors() {
-      if (state.skinTone) applyColorToCategory('skin', state.skinTone);
-      if (state.colors.top) applyColorToCategory('top', state.colors.top);
-      if (state.colors.bottom) applyColorToCategory('bottom', state.colors.bottom);
-      if (state.colors.shoes) applyColorToCategory('shoes', state.colors.shoes);
+      if (state.skinTone) applyColor('skin', state.skinTone);
+      if (state.colors.top) applyColor('top', state.colors.top);
+      if (state.colors.bottom) applyColor('bottom', state.colors.bottom);
+      if (state.colors.shoes) applyColor('shoes', state.colors.shoes);
     }
 
-    function applyColorToCategory(category, hex) {
-      const list = categorizedMaterials[category];
+    function applyColor(category, hex) {
+      const list = materialsByCategory[category];
       if (!list || list.length === 0) return;
-
-      const col = new THREE.Color(hex);
-      list.forEach(mat => {
-        mat.color.copy(col);
-        mat.needsUpdate = true;
+      const c = new THREE.Color(hex);
+      list.forEach(m => {
+        m.color.copy(c);
+        m.needsUpdate = true;
       });
     }
 
     // ==========================================
-    // EXPOSED HOOKS (Triggered from Compose/Kotlin)
+    // EXPOSED METHODS FOR KOTLIN / JETPACK COMPOSE
     // ==========================================
     window.setGender = function(gender) {
       if (!gender || gender.toLowerCase() === state.gender) return;
@@ -408,9 +386,9 @@ currentModelGroup.position.y = -updatedBox.min.y + 0.06;
       updateBadge();
 
       if (currentModelGroup) {
-        // Subtle proportion adjustment
         const widthMult = (state.bodyType === 'athletic') ? 1.08 :
                           (state.bodyType === 'broad') ? 1.15 :
+                          (state.bodyType === 'curvy') ? 1.10 :
                           (state.bodyType === 'slim') ? 0.94 : 1.0;
         currentModelGroup.scale.x = currentModelGroup.scale.y * widthMult;
         currentModelGroup.scale.z = currentModelGroup.scale.y * widthMult;
@@ -421,20 +399,20 @@ currentModelGroup.position.y = -updatedBox.min.y + 0.06;
       if (!category || !hex) return;
       const cat = category.toLowerCase();
       state.colors[cat] = hex;
-      applyColorToCategory(cat, hex);
+      applyColor(cat, hex);
     };
 
     window.setSkinTone = function(hex) {
       if (!hex) return;
       state.skinTone = hex;
-      applyColorToCategory('skin', hex);
+      applyColor('skin', hex);
     };
 
-    window.updateColors = function(topHex, bottomHex, shoesHex, headHex, accHex, skinHex) {
-      if (topHex) { state.colors.top = topHex; applyColorToCategory('top', topHex); }
-      if (bottomHex) { state.colors.bottom = bottomHex; applyColorToCategory('bottom', bottomHex); }
-      if (shoesHex) { state.colors.shoes = shoesHex; applyColorToCategory('shoes', shoesHex); }
-      if (skinHex) { state.skinTone = skinHex; applyColorToCategory('skin', skinHex); }
+    window.updateColors = function(topHex, botHex, shoeHex, headHex, accHex, skinHex) {
+      if (topHex) { state.colors.top = topHex; applyColor('top', topHex); }
+      if (botHex) { state.colors.bottom = botHex; applyColor('bottom', botHex); }
+      if (shoeHex) { state.colors.shoes = shoeHex; applyColor('shoes', shoeHex); }
+      if (skinHex) { state.skinTone = skinHex; applyColor('skin', skinHex); }
     };
 
     window.setRotation = function(degrees) {
@@ -453,6 +431,16 @@ currentModelGroup.position.y = -updatedBox.min.y + 0.06;
       }
     };
 
+    window.loadModel = function(gender, bodyType) {
+      if (gender && gender.toLowerCase() !== state.gender) {
+        state.gender = gender.toLowerCase();
+        loadGLBModel(state.gender);
+      }
+      if (bodyType) {
+        window.setBodyType(bodyType);
+      }
+    };
+
     function updateBadge() {
       const label = document.getElementById('model-label');
       if (label) {
@@ -461,7 +449,7 @@ currentModelGroup.position.y = -updatedBox.min.y + 0.06;
     }
 
     // ==========================================
-    // TOUCH INTERACTIONS & ANIMATION LOOP
+    // TOUCH GESTURES & ANIMATION LOOP
     // ==========================================
     function bindPointerEvents(element) {
       element.addEventListener('pointerdown', (e) => {
@@ -498,7 +486,6 @@ currentModelGroup.position.y = -updatedBox.min.y + 0.06;
     function animate() {
       requestAnimationFrame(animate);
 
-      // Inertia damping
       if (!isDragging && Math.abs(touchVelocity) > 0.0001) {
         touchVelocity *= 0.92;
         state.rotation += touchVelocity;
