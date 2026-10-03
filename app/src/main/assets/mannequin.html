@@ -163,9 +163,9 @@
       scene = new THREE.Scene();
       scene.background = new THREE.Color(state.isDark ? 0x111111 : 0xFAFAFA);
 
-      camera = new THREE.PerspectiveCamera(42, width / height, 0.1, 100);
-      camera.position.set(0, 1.05, 3.4);
-      camera.lookAt(0, 0.85, 0);
+      camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 100);
+      camera.position.set(0, 0.95, 3.2);
+      camera.lookAt(0, 0.75, 0);
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setSize(width, height);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -271,27 +271,55 @@ const fileName = basePath + ((gender === 'male') ? 'models/mannequin_male.glb' :
 
           currentModelGroup = gltf.scene;
 
-// 1. Force update matrix world to get true vertex bounds
+// 1. Force bone matrices to calculate accurately
+currentModelGroup.traverse((child) => {
+  if (child.isSkinnedMesh) {
+    child.computeBoundingBox();
+  }
+});
 currentModelGroup.updateMatrixWorld(true);
 
-// 2. Measure raw bounds
-let box = new THREE.Box3().setFromObject(currentModelGroup);
-let size = box.getSize(new THREE.Vector3());
+// 2. Measure actual geometric bounds
+let box = new THREE.Box3();
+currentModelGroup.traverse((child) => {
+  if (child.isMesh) {
+    if (child.geometry) {
+      if (!child.geometry.boundingBox) child.geometry.computeBoundingBox();
+      const geomBox = child.geometry.boundingBox.clone();
+      geomBox.applyMatrix4(child.matrixWorld);
+      box.union(geomBox);
+    }
+  }
+});
 
-// 3. Scale down from Mixamo centimeter units (~180) to Three.js meter units (1.6m)
-const targetHeight = 1.6;
-const rawHeight = size.y > 0 ? size.y : 1;
-const scaleFactor = targetHeight / rawHeight;
+// Fallback if geometry traversal yields zero
+if (box.isEmpty()) {
+  box.setFromObject(currentModelGroup);
+}
+
+const size = box.getSize(new THREE.Vector3());
+
+// 3. Fallback: If raw height is around 160-190 (centimeters), divide by 100
+let rawHeight = size.y;
+let targetHeight = 1.35; // Ideal height inside mobile viewport
+
+let scaleFactor = 0.009; // Sensible default for ~170cm Mixamo models
+if (rawHeight > 20) {
+  scaleFactor = targetHeight / rawHeight;
+} else if (rawHeight > 0.1) {
+  scaleFactor = targetHeight / rawHeight;
+}
+
 currentModelGroup.scale.setScalar(scaleFactor);
-
-// 4. Update bounds after scaling to ground feet right on the podium ring
 currentModelGroup.updateMatrixWorld(true);
-box = new THREE.Box3().setFromObject(currentModelGroup);
 
-const center = box.getCenter(new THREE.Vector3());
+// 4. Center horizontally and place feet directly on the podium
+const updatedBox = new THREE.Box3().setFromObject(currentModelGroup);
+const center = updatedBox.getCenter(new THREE.Vector3());
+
 currentModelGroup.position.x = -center.x;
 currentModelGroup.position.z = -center.z;
-currentModelGroup.position.y = -box.min.y + 0.06;
+currentModelGroup.position.y = -updatedBox.min.y + 0.06;
           // Traverse meshes and map materials
           currentModelGroup.traverse((child) => {
             if (child.isMesh) {
